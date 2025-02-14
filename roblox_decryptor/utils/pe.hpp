@@ -1,41 +1,35 @@
 #pragma once
 
 #include <cstdint>
-#include <utility>
-#include <functional>
+#include <string>
+#include <Windows.h>
 
 namespace decryptor::utils
 {
+	struct range
+	{
+		std::uintptr_t base;
+		std::uint32_t size;
+	};
+
+	struct section_info
+	{
+		range virtual_range;
+		range raw_range;
+	};
+
 	class pe
 	{
 	public:
-		struct range_t
-		{
-			std::uintptr_t base;
-			std::uint32_t size;
-		};
+		pe(std::uintptr_t base);
 
-		struct section_t
-		{
-			range_t virtual_range;
-			range_t raw_range;
-		};
-
-	public:
-		pe(const char* mod);
-		pe(std::uintptr_t mod);
-
-		section_t get_section(const char* section) const;
-
+		section_info get_section(const std::string& name) const;
 		std::uintptr_t get_image_base() const;
 		std::uint32_t get_image_size() const;
+		IMAGE_NT_HEADERS* get_nt_headers() const;
 
 	private:
-		void parse_headers();
-
-	private:
-		std::uintptr_t base;
-
-		void* nt_headers;
+		std::uintptr_t _base;
+		IMAGE_NT_HEADERS* _nt_headers;
 	};
 }

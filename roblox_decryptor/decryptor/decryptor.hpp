@@ -20,13 +20,18 @@ namespace decryptor
 
 	private:
 		std::uintptr_t get_base_from_handle(void* handle) const;
+		bool find_encryption_context();
+		bool validate_hyperion_version();
+		bool process_hypv_version(std::uintptr_t hypv_loc);
 		
 	private:
 		void* hyperion_handle;
 		void* roblox_handle;
 
 		std::uintptr_t page_info_base;
+		std::uintptr_t encryption_context;
 
 		std::ofstream out_file;
+		bool is_valid;
 	};
 }
