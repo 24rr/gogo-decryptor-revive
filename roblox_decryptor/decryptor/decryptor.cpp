@@ -330,109 +330,108 @@ namespace decryptor
 		std::printf("Roblox code section: base=0x%p, size=0x%llx\n", 
 			(void*)roblox_code.virtual_range.base, 
 			static_cast<unsigned long long>(roblox_code.virtual_range.size));
-		
-		std::printf("Page info base: 0x%p\n", (void*)page_info_base);
-		std::printf("Encryption context: 0x%p\n", (void*)encryption_context);
 
-		
-		std::printf("\nFirst page info entry dump:\n");
-		for (int i = 0; i < 0x18; i += 8) {
-			std::printf("Offset +0x%02x: 0x%016llx\n", 
-				i, 
-				*reinterpret_cast<std::uint64_t*>(page_info_base + i));
+		// First create a complete copy of the original file
+		std::printf("Creating base PE file...\n");
+		std::ifstream src{ "RobloxPlayerBeta.exe", std::ios::binary };
+		if (!src.is_open()) {
+			std::printf("Failed to open source file\n");
+			return;
 		}
-		std::printf("\n");
 
+		// Get file size
+		src.seekg(0, std::ios::end);
+		const auto file_size = src.tellg();
+		src.seekg(0);
+
+		// Read entire file
+		std::vector<char> file_data(file_size);
+		src.read(file_data.data(), file_size);
+		src.close();
+
+		// Write to output
+		out_file.seekp(0);
+		out_file.write(file_data.data(), file_size);
 		
-		constexpr std::uint32_t KEY_OFFSET = 0x0;  
-		constexpr std::uint32_t SIZE_OFFSET = 0x10; 
-		constexpr std::uint32_t FLAGS_OFFSET = 0x14; 
+		// Now perform decryption
+		std::printf("Starting page decryption...\n");
 
-		for (auto target_page = roblox_code.virtual_range.base; 
-			 target_page < roblox_code.virtual_range.base + roblox_code.virtual_range.size; 
-			 target_page += 0x1000)
+		constexpr std::uint32_t KEY_OFFSET = 0x0;
+		constexpr std::uint32_t SIZE_OFFSET = 0x10;
+		constexpr std::uint32_t FLAGS_OFFSET = 0x14;
+
+		// Create a buffer for decrypted text section
+		std::vector<uint8_t> decrypted_text(roblox_code.virtual_range.size);
+		std::memcpy(decrypted_text.data(), 
+			reinterpret_cast<void*>(roblox_code.virtual_range.base), 
+			roblox_code.virtual_range.size);
+
+		for (std::size_t offset = 0; offset < roblox_code.virtual_range.size; offset += 0x1000)
 		{
+			const auto target_page = roblox_code.virtual_range.base + offset;
 			const auto target_page_number = (target_page - roblox_image.get_image_base()) / 0x1000;
 			const auto target_page_info_base = page_info_base + (target_page_number % 10000) * 0x18;
 
-			
 			const auto key_ptr = *reinterpret_cast<std::uintptr_t*>(target_page_info_base + KEY_OFFSET);
 			const auto key_size = *reinterpret_cast<std::uint32_t*>(target_page_info_base + SIZE_OFFSET);
 			const auto flags = *reinterpret_cast<std::uint32_t*>(target_page_info_base + FLAGS_OFFSET);
 
-			std::printf("Page 0x%llx: key_ptr=0x%p, size=0x%x, flags=0x%x\n",
-				static_cast<unsigned long long>(target_page_number),
-				(void*)key_ptr,
-				key_size,
-				flags);
-
-			
 			if (key_size == 0 || key_size > 32 || key_ptr == 0) {
-				if (flags != 0) {  
-					std::printf("Skipping page - flags=0x%x\n", flags);
-				}
 				continue;
 			}
 
 			try {
 				std::array<std::uint8_t, 32> key{};
-				
-				
 				if (!IsBadReadPtr(reinterpret_cast<const void*>(key_ptr), key_size)) {
 					std::memcpy(key.data(), reinterpret_cast<void*>(key_ptr), key_size);
 					
-					std::printf("Key found for page 0x%llx: ", static_cast<unsigned long long>(target_page_number));
-					for (std::uint32_t i = 0; i < key_size; i++) {
-						std::printf("%02x", key[i]);
-					}
-					std::printf("\n");
-
+					const auto page_size = std::min<size_t>(0x1000, roblox_code.virtual_range.size - offset);
+					
 					chacha20_context ctx;
 					chacha20_init_context(&ctx, key.data(), 0);
-					chacha20_xor(&ctx, reinterpret_cast<uint8_t*>(target_page), 0x1000);
-				} else {
-					std::printf("Invalid key pointer for page 0x%llx\n", 
-						static_cast<unsigned long long>(target_page_number));
+					chacha20_xor(&ctx, 
+						decrypted_text.data() + offset,
+						page_size);
 				}
 			} catch (...) {
-				std::printf("Exception while processing page 0x%llx\n", 
-					static_cast<unsigned long long>(target_page_number));
+				std::printf("Exception while processing page at offset 0x%zx\n", offset);
 			}
 		}
 
-		std::printf("Writing decrypted data...\n");
-		
-		std::printf("Creating IDA-friendly PE dump...\n");
-		
-		const auto dos_header = reinterpret_cast<IMAGE_DOS_HEADER*>(roblox_image.get_image_base());
-		const auto nt_headers = roblox_image.get_nt_headers();
-		
-		out_file.seekp(0);
-		out_file.write(reinterpret_cast<const char*>(dos_header), sizeof(IMAGE_DOS_HEADER));
-		out_file.seekp(dos_header->e_lfanew);
-		out_file.write(reinterpret_cast<const char*>(nt_headers), 
-			sizeof(IMAGE_NT_HEADERS) + (nt_headers->FileHeader.NumberOfSections * sizeof(IMAGE_SECTION_HEADER)));
-
+		// Write the decrypted .text section
+		std::printf("Writing decrypted .text section...\n");
 		out_file.seekp(roblox_code.raw_range.base);
-		out_file.write(reinterpret_cast<char*>(roblox_code.virtual_range.base), roblox_code.virtual_range.size);
-		
-		const auto sections_to_copy = { ".rdata", ".data", ".rsrc" };
-		for (const auto& section_name : sections_to_copy) {
-			const auto section = roblox_image.get_section(section_name);
-			if (section.virtual_range.base && section.raw_range.base) {
-				std::printf("Copying section %s...\n", section_name);
-				out_file.seekp(section.raw_range.base);
-				out_file.write(reinterpret_cast<char*>(section.virtual_range.base), section.virtual_range.size);
+		out_file.write(reinterpret_cast<char*>(decrypted_text.data()), 
+			roblox_code.virtual_range.size);
+
+		// Update section permissions
+		auto nt_headers = reinterpret_cast<IMAGE_NT_HEADERS*>(
+			file_data.data() + 
+			reinterpret_cast<IMAGE_DOS_HEADER*>(file_data.data())->e_lfanew);
+
+		auto section = IMAGE_FIRST_SECTION(nt_headers);
+		for (WORD i = 0; i < nt_headers->FileHeader.NumberOfSections; i++) {
+			if (std::strncmp(reinterpret_cast<const char*>(section[i].Name), ".text", 8) == 0) {
+				section[i].Characteristics |= IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ;
+				break;
 			}
 		}
+
+		// Write updated headers
+		out_file.seekp(0);
+		out_file.write(file_data.data(), 
+			reinterpret_cast<IMAGE_DOS_HEADER*>(file_data.data())->e_lfanew + 
+			sizeof(IMAGE_NT_HEADERS) + 
+			(nt_headers->FileHeader.NumberOfSections * sizeof(IMAGE_SECTION_HEADER)));
 
 		out_file.flush();
-		std::printf("Decryption complete - saved as full PE dump\n");
-		std::printf("\nTo load in IDA Pro:\n");
+		std::printf("Decryption complete\n");
+		std::printf("\nTo analyze in IDA Pro:\n");
 		std::printf("1. File -> New\n");
 		std::printf("2. Select the output file\n");
 		std::printf("3. Choose 'PE Executable' as file type\n");
-		std::printf("4. Use default options for best results\n");
+		std::printf("4. Set loading address to match original base\n");
+		std::printf("5. Let IDA analyze the file normally\n");
 	}
 
 	std::uintptr_t code_decryptor::get_base_from_handle(void* handle) const
