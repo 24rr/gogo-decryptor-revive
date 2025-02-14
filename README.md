@@ -1,6 +1,6 @@
 # roblox-decryptor
 
-## REVIVED BY bufferization (works with latest roblox hypv)
+## revival, will take a long time
 
 ## What is this?
 This is a static decryptor for Roblox. Essentially, it decrypts all the code pages manually by fetching the encryption keys from Hyperion, instead of following the usual dynamic approach, which forces Hyperion to decrypt the pages at runtime.
